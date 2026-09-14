@@ -1322,14 +1322,18 @@ export class DefaultBrowserManager implements BrowserManager {
     diagnostic: BrowserConsoleDiagnostic,
   ): void {
     try {
-      const level = decideConsoleLevel(diagnostic.type);
-      if (level === 'none') {
-        return;
-      }
       const source =
         diagnostic.sourceUrl === undefined
           ? undefined
           : sanitizeBrowserUrl(diagnostic.sourceUrl);
+      const level = decideConsoleLevel(
+        diagnostic.type,
+        diagnostic.text,
+        source?.endpointCategory,
+      );
+      if (level === 'none') {
+        return;
+      }
       this.logger[level]('browser_console_message', {
         channel,
         browserGeneration: entry.browserGeneration,

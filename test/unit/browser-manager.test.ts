@@ -1508,7 +1508,7 @@ describe('DefaultBrowserManager', () => {
       failureText: 'net::ERR_ABORTED',
     });
 
-    expect(logger.warn).toHaveBeenCalledWith('browser_request_failed', {
+    expect(logger.debug).toHaveBeenCalledWith('browser_request_failed', {
       channel: 'channel',
       browserGeneration: 1,
       pageGeneration: 1,
@@ -1519,7 +1519,7 @@ describe('DefaultBrowserManager', () => {
       resourceType: 'script',
       failureText: 'net::ERR_ABORTED',
     });
-    const serialized = JSON.stringify(vi.mocked(logger.warn).mock.calls);
+    const serialized = JSON.stringify(vi.mocked(logger.debug).mock.calls);
     expect(serialized).not.toContain('super-secret');
     expect(serialized).not.toContain('challenge=abc');
   });
@@ -1795,6 +1795,50 @@ describe('DefaultBrowserManager', () => {
     });
     expect(serialized).not.toContain('secret=1');
     expect(serialized).not.toContain('ordinary log');
+  });
+
+  it('third_party 來源的 console error 與已知噪音 pattern 以 debug 記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitConsole({
+      type: 'error',
+      text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED',
+      sourceUrl: 'https://sb.scorecardresearch.com/p',
+    });
+    page.emitConsole({
+      type: 'error',
+      text: 'SpadeClient send error -1 : Failed to fetch',
+      sourceUrl: 'https://assets.twitch.tv/amazon-ivs-wasmworker.js',
+    });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledWith(
+      'browser_console_message',
+      expect.objectContaining({
+        channel: 'channel',
+        consoleType: 'error',
+        message: 'Failed to load resource: net::ERR_CONNECTION_REFUSED',
+        sourceHost: 'sb.scorecardresearch.com',
+        sourcePath: '/p',
+      }),
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      'browser_console_message',
+      expect.objectContaining({
+        channel: 'channel',
+        consoleType: 'error',
+        message: 'SpadeClient send error -1 : Failed to fetch',
+        sourceHost: 'assets.twitch.tv',
+      }),
+    );
   });
 
   it('closePage 與 stop 會移除全部 diagnostics listener', async () => {

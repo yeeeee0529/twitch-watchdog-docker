@@ -245,9 +245,10 @@ export function decideHttpResponseLevel(
 
 /**
  * Decide the log level for a failed request. Tracking and analytics
- * hosts blocked by the local network, unknown hosts, and media segments
- * aborted by a quality switch are routine noise and map to `debug`;
- * failures on Twitch core endpoints stay at `warn`.
+ * hosts blocked by the local network, unknown hosts, and aborted
+ * requests (`net::ERR_ABORTED`, for example media segments cancelled
+ * by a quality switch) are routine noise and map to `debug`; failures
+ * on Twitch core endpoints stay at `warn`.
  */
 export function decideRequestFailureLevel(
   endpointCategory: EndpointCategory,
@@ -260,25 +261,51 @@ export function decideRequestFailureLevel(
   ) {
     return 'debug';
   }
-  if (
-    endpointCategory === 'twitch_media' &&
-    failureText === 'net::ERR_ABORTED'
-  ) {
+  if (failureText === 'net::ERR_ABORTED') {
     return 'debug';
   }
   return 'warn';
 }
 
 /**
- * Map a console message type to a log level: `error` maps to `warn`,
- * `warning`/`warn` to `debug`, and ordinary `log`, `info`, `debug`,
- * table, timing, and trace messages are ignored.
+ * Console error message patterns that mirror demoted request failures:
+ * routine page-side errors caused by the same blocked tracking hosts or
+ * Twitch-side integrity checks, not by the watchdog itself.
+ */
+const CONSOLE_ERROR_DEBUG_PATTERNS = [
+  'spadeclient send error',
+  'failed integrity check',
+];
+
+/**
+ * Map a console message type to a log level: `error` maps to `warn`
+ * unless the message source is a routine-noise host (`third_party`,
+ * `twitch_other`, `unknown`) or the message matches a known noise
+ * pattern. `warning`/`warn` maps to `debug`, and ordinary `log`,
+ * `info`, `debug`, table, timing, and trace messages are ignored.
  */
 export function decideConsoleLevel(
   consoleType: string,
+  message: string,
+  endpointCategory: EndpointCategory | undefined,
 ): DiagnosticLogLevel {
   const normalized = consoleType.trim().toLocaleLowerCase('en-US');
   if (normalized === 'error') {
+    if (
+      endpointCategory === 'third_party' ||
+      endpointCategory === 'twitch_other' ||
+      endpointCategory === 'unknown'
+    ) {
+      return 'debug';
+    }
+    const normalizedMessage = message.trim().toLocaleLowerCase('en-US');
+    if (
+      CONSOLE_ERROR_DEBUG_PATTERNS.some((pattern) =>
+        normalizedMessage.includes(pattern),
+      )
+    ) {
+      return 'debug';
+    }
     return 'warn';
   }
   if (normalized === 'warning' || normalized === 'warn') {

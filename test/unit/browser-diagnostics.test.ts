@@ -207,10 +207,14 @@ describe('decideRequestFailureLevel', () => {
     ['twitch_other', 'net::ERR_CONNECTION_REFUSED', 'debug'],
     ['unknown', 'net::ERR_FAILED', 'debug'],
     ['twitch_media', 'net::ERR_ABORTED', 'debug'],
+    ['twitch_document', 'net::ERR_ABORTED', 'debug'],
+    ['twitch_javascript', 'net::ERR_ABORTED', 'debug'],
+    ['twitch_graphql', 'net::ERR_ABORTED', 'debug'],
+    ['twitch_anti_abuse', 'net::ERR_ABORTED', 'debug'],
     ['twitch_media', 'net::ERR_CONNECTION_REFUSED', 'warn'],
     ['twitch_media', undefined, 'warn'],
-    ['twitch_document', 'net::ERR_ABORTED', 'warn'],
-    ['twitch_javascript', 'net::ERR_ABORTED', 'warn'],
+    ['twitch_document', 'net::ERR_FAILED', 'warn'],
+    ['twitch_javascript', 'net::ERR_FAILED', 'warn'],
     ['twitch_graphql', 'net::ERR_FAILED', 'warn'],
     ['twitch_api', 'net::ERR_CONNECTION_REFUSED', 'warn'],
     ['twitch_anti_abuse', 'net::ERR_FAILED', 'warn'],
@@ -226,17 +230,66 @@ describe('decideRequestFailureLevel', () => {
 
 describe('decideConsoleLevel', () => {
   it.each([
-    ['error', 'warn'],
-    ['warning', 'debug'],
-    ['warn', 'debug'],
-    ['log', 'none'],
-    ['info', 'none'],
-    ['debug', 'none'],
-    ['table', 'none'],
-    ['timeEnd', 'none'],
-    ['trace', 'none'],
-  ])('%s → %s', (type, expected) => {
-    expect(decideConsoleLevel(type)).toBe(expected);
+    [
+      'error',
+      'Failed to load resource: net::ERR_CONNECTION_REFUSED',
+      'third_party',
+      'debug',
+    ],
+    [
+      'error',
+      'Failed to load resource: net::ERR_CONNECTION_REFUSED',
+      'twitch_other',
+      'debug',
+    ],
+    ['error', 'Failed to load resource: net::ERR_ABORTED', 'unknown', 'debug'],
+    [
+      'error',
+      'Failed to load resource: net::ERR_ABORTED',
+      undefined,
+      'warn',
+    ],
+    [
+      'error',
+      'SpadeClient send error -1 : Failed to fetch',
+      'twitch_javascript',
+      'debug',
+    ],
+    [
+      'error',
+      '[GraphQL] One or more GraphQL errors were detected on request ABC. DropChannelCampaignsProgress: failed integrity check [Object]',
+      'twitch_javascript',
+      'debug',
+    ],
+    [
+      'error',
+      'Failed to load resource: the server responded with a status of 429 (Too Many Requests)',
+      'twitch_anti_abuse',
+      'warn',
+    ],
+    [
+      'error',
+      'Failed to load resource: net::ERR_ABORTED',
+      'twitch_javascript',
+      'warn',
+    ],
+    ['error', 'Some other page error', 'twitch_graphql', 'warn'],
+    ['warning', '', undefined, 'debug'],
+    ['warn', '', undefined, 'debug'],
+    ['log', '', undefined, 'none'],
+    ['info', '', undefined, 'none'],
+    ['debug', '', undefined, 'none'],
+    ['table', '', undefined, 'none'],
+    ['timeEnd', '', undefined, 'none'],
+    ['trace', '', undefined, 'none'],
+  ])('%s / %s / %s → %s', (type, message, category, expected) => {
+    expect(
+      decideConsoleLevel(
+        type,
+        message,
+        category as Parameters<typeof decideConsoleLevel>[2],
+      ),
+    ).toBe(expected);
   });
 });
 
