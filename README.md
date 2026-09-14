@@ -8,7 +8,7 @@ Twitch Watchdog 是可用 Docker 長時間執行的 Twitch 觀看輔助服務。
 
 - 監控多個 Twitch 頻道開台狀態。
 - 依 `channels` 順序與 `max_concurrent_streams` 決定實際觀看頻道。
-- 使用 Firefox 播放 Twitch直播。
+- 使用 Chromium 播放 Twitch直播。
 - 自動確認 Twitch 直播頁的內容警示（`Start Watching`）後繼續觀看。
   Automatically accepts Twitch channel content warnings (`Start Watching`) before continuing playback.
 - 啟動與頁面重整後自動收合 Twitch 左側推薦頻道欄，減少非必要畫面內容。
@@ -64,7 +64,7 @@ twitch_api:
   client_secret: 你的ClientSecret
 
 browser:
-  engine: firefox
+  engine: chromium
   stream_quality: 160p
   page_refresh_interval_seconds: 0
   resource_telemetry_interval_seconds: 60
@@ -82,13 +82,13 @@ discord:
 - `check_interval_seconds`：Twitch API 輪詢間隔，最小 30 秒。
 - `max_concurrent_streams`：最大同時觀看數。
 - `storage_state_path`：容器內 Playwright storageState 路徑。
-- `browser.engine`：支援 `firefox` 與 `chromium`，預設為 `firefox`。
-  Supports `firefox` and `chromium`; the default is `firefox`.
+- `browser.engine`：支援 `chromium` 與 `firefox`，預設為 `chromium`。
+  Supports `chromium` and `firefox`; the default is `chromium`.
 - `browser.stream_quality`：預設 `160p`；設為 `auto` 可停用強制畫質。
-- `browser.page_refresh_interval_seconds`：預設 `0`（關閉定時重整以降低 Firefox 記憶體壓力）；設正值可啟用定時重整並依頻道錯開。此功能會保留，因 Twitch 可能在重整後提供可領取的忠誠點數按鈕；手動 `/refresh_now` 仍可用。
-  Defaults to `0` (scheduled refresh off to reduce Firefox memory pressure). Positive values enable staggered scheduled refresh. This remains supported because Twitch may expose a claimable loyalty-points button after reload; manual `/refresh_now` also remains available.
-- Session 啟動在短重試後仍發生 `page.goto` 導覽逾時時，5 分鐘內同一頻道 2 次或全部頻道合計 3 次會回收共用 Firefox；10 分鐘內 3 次此類 browser failure recovery 會要求 Docker 重啟容器。定時／手動頁面重整逾時不納入此計數。
-  If session startup still ends in a `page.goto` timeout after its short retry, two failures for one channel or three across all channels within five minutes recycle the shared Firefox. Three such browser-failure recoveries within ten minutes request a Docker container restart. Scheduled/manual reload timeouts are not counted.
+- `browser.page_refresh_interval_seconds`：預設 `0`（關閉定時重整以降低瀏覽器記憶體壓力）；設正值可啟用定時重整並依頻道錯開。此功能會保留，因 Twitch 可能在重整後提供可領取的忠誠點數按鈕；手動 `/refresh_now` 仍可用。
+  Defaults to `0` (scheduled refresh off to reduce browser memory pressure). Positive values enable staggered scheduled refresh. This remains supported because Twitch may expose a claimable loyalty-points button after reload; manual `/refresh_now` also remains available.
+- Session 啟動在短重試後仍發生 `page.goto` 導覽逾時時，5 分鐘內同一頻道 2 次或全部頻道合計 3 次會回收共用瀏覽器；10 分鐘內 3 次此類 browser failure recovery 會要求 Docker 重啟容器。定時／手動頁面重整逾時不納入此計數。
+  If session startup still ends in a `page.goto` timeout after its short retry, two failures for one channel or three across all channels within five minutes recycle the shared browser. Three such browser-failure recoveries within ten minutes request a Docker container restart. Scheduled/manual reload timeouts are not counted.
 - `browser.resource_telemetry_interval_seconds`：預設 60 秒輸出 `runtime_resource_snapshot`（含 cgroup 欄位）。
   Defaults to 60 seconds for `runtime_resource_snapshot` (includes cgroup fields).
 - `browser.resource_guard`：容器級記憶體防護（見下方）。
@@ -107,7 +107,7 @@ Docker Compose 預設限制（約 **3 同時觀看** 的基線）：
 若 `max_concurrent_streams` 明顯高於 3（例如 5），請提高 Compose 記憶體上限（建議約 10g/11g）後再 recreate 容器。
 If `max_concurrent_streams` is much higher than 3 (e.g. 5), raise Compose memory limits (about 10g/11g recommended) and recreate the container.
 
-`browser.resource_guard` 以 **整容器 cgroup** 記憶體為準（含 Firefox），不是只看 Node.js。YAML 中的 MiB 門檻是 **N=`baseline_streams`（預設 3）錨點**；`scale_with_streams: true` 時：
+`browser.resource_guard` 以 **整容器 cgroup** 記憶體為準（含瀏覽器），不是只看 Node.js。YAML 中的 MiB 門檻是 **N=`baseline_streams`（預設 3）錨點**；`scale_with_streams: true` 時：
 
 ```text
 effective = base_memory_mib + (anchor - base_memory_mib) * (max_concurrent_streams / baseline_streams)
@@ -122,7 +122,7 @@ effective = base_memory_mib + (anchor - base_memory_mib) * (max_concurrent_strea
 - 過快成長（`fast_memory_growth`）：僅在 **目前記憶體已達 warning 以上**，且視窗內成長量達門檻時才重開容器；browser 重啟後預設 120 秒內忽略此規則（避免 session 回填被誤判）。
 - 無 cgroup v2 時只記 `cgroup_metrics_unavailable`，仍依賴 Docker hard limit。
 
-Thresholds are container-wide cgroup memory (including Firefox), not Node-only. YAML MiB values are anchors for `baseline_streams` (default 3) and scale with `max_concurrent_streams` when enabled. While a browser recycle is in flight, emergency memory, swap, and cgroup OOM signals remain active; ordinary warning, recycle, and growth-rate rules pause to avoid refill false positives. `fast_memory_growth` requires both a rate spike and absolute memory at/above the warning waterline; browser restarts apply a short rate-rule grace so session refill is not fatal. Missing cgroup v2 degrades to process metrics only; Docker hard limits remain the host protection.
+Thresholds are container-wide cgroup memory (including the browser), not Node-only. YAML MiB values are anchors for `baseline_streams` (default 3) and scale with `max_concurrent_streams` when enabled. While a browser recycle is in flight, emergency memory, swap, and cgroup OOM signals remain active; ordinary warning, recycle, and growth-rate rules pause to avoid refill false positives. `fast_memory_growth` requires both a rate spike and absolute memory at/above the warning waterline; browser restarts apply a short rate-rule grace so session refill is not fatal. Missing cgroup v2 degrades to process metrics only; Docker hard limits remain the host protection.
 
 查詢 cgroup 遙測：
 
@@ -231,6 +231,29 @@ To diagnose stuck scheduler ticks, page crashes, or browser cleanup issues, temp
 ```bash
 docker compose logs --no-log-prefix twitch-watchdog \
   | rg 'scheduler_tick_|scheduler_stall_detected|session_(reconcile|invalidate|start_attempt)|browser_(page_invalidation|resource_close|navigation_failure)|page_crashed|page_closed|page_refresh_failed'
+```
+
+### 瀏覽器診斷事件 / Browser diagnostics
+
+每個受管理的頻道頁面都會安裝請求與 console 診斷，輸出三個新事件：
+
+- `browser_request_failed`（warn）：Playwright `requestfailed`，記錄 `endpointCategory`、`host`、`path`、`method`、`resourceType`、`failureText` 與（GraphQL 請求時）`graphQlOperationNames`。
+- `browser_http_response`（warn / debug）：非成功 HTTP 回應以 warn 記錄；`log_level: debug` 時，成功的 Twitch bootstrap 回應（document、script、GraphQL、API）以 debug 記錄。例行 media segment、圖片、字型與第三方分析不記錄。
+- `browser_console_message`（warn / debug）：console `error` 以 warn、`warning` 以 debug 記錄；一般 `log` 訊息不記錄。
+
+所有事件都帶 `channel`、`browserGeneration` 與 `pageGeneration`。URL 只保留 hostname 與 pathname，**刻意排除 query string、cookie、request/response body 與 GraphQL variables**。
+
+Every managed channel page installs request and console diagnostics, emitting three new events:
+
+- `browser_request_failed` (warn): Playwright `requestfailed` with `endpointCategory`, `host`, `path`, `method`, `resourceType`, `failureText`, and `graphQlOperationNames` for GraphQL requests.
+- `browser_http_response` (warn / debug): non-success HTTP responses log at warn; with `log_level: debug`, successful Twitch bootstrap responses (document, script, GraphQL, API) log at debug. Routine media segments, images, fonts, and third-party analytics are excluded.
+- `browser_console_message` (warn / debug): console `error` maps to warn, `warning` to debug; ordinary `log` messages are ignored.
+
+All events carry `channel`, `browserGeneration`, and `pageGeneration`. URLs keep only the hostname and pathname, **deliberately excluding query strings, cookies, request/response bodies, and GraphQL variables**.
+
+```bash
+docker compose logs --no-log-prefix twitch-watchdog \
+  | rg 'browser_(request_failed|http_response|console_message)|page_health_failed|browser_disconnected'
 ```
 
 常用操作：

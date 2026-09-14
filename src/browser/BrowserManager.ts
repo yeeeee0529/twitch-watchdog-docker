@@ -5,10 +5,17 @@ import {
   redactSensitiveString,
 } from '../logging/Logger.js';
 import { PlaywrightBrowserLauncher } from './adapters/PlaywrightBrowserLauncher.js';
+import {
+  decideConsoleLevel,
+  decideHttpResponseLevel,
+  sanitizeBrowserUrl,
+} from './browser-diagnostics.js';
 import type {
   BrowserAdapter,
+  BrowserConsoleDiagnostic,
   BrowserContextAdapter,
   BrowserFatalRecoveryObserver,
+  BrowserHttpResponseDiagnostic,
   BrowserInvalidation,
   BrowserInvalidationObserver,
   BrowserInvalidationReason,
@@ -19,6 +26,7 @@ import type {
   BrowserManagerLogger,
   BrowserNavigationOutcome,
   BrowserPageAdapter,
+  BrowserRequestFailureDiagnostic,
   BrowserRestartedEvent,
   BrowserRestartedObserver,
   BrowserTeardownResult,
@@ -31,9 +39,11 @@ import type {
 export { PlaywrightBrowserLauncher } from './adapters/PlaywrightBrowserLauncher.js';
 export type {
   BrowserAdapter,
+  BrowserConsoleDiagnostic,
   BrowserContextAdapter,
   BrowserContextOptions,
   BrowserFatalRecoveryObserver,
+  BrowserHttpResponseDiagnostic,
   BrowserInvalidation,
   BrowserInvalidationObserver,
   BrowserInvalidationReason,
@@ -45,6 +55,7 @@ export type {
   BrowserManagerLogger,
   BrowserNavigationOutcome,
   BrowserPageAdapter,
+  BrowserRequestFailureDiagnostic,
   BrowserRestartedEvent,
   BrowserRestartedObserver,
   BrowserTeardownResult,
@@ -511,6 +522,9 @@ export class DefaultBrowserManager implements BrowserManager {
       unsubscribeCrash: () => undefined,
       unsubscribeClose: () => undefined,
       unsubscribePopup: () => undefined,
+      unsubscribeRequestFailed: () => undefined,
+      unsubscribeResponse: () => undefined,
+      unsubscribeConsole: () => undefined,
     };
 
     try {
@@ -522,6 +536,15 @@ export class DefaultBrowserManager implements BrowserManager {
       });
       entry.unsubscribePopup = adapter.onPopup((popup) => {
         void this.closeUnexpectedPopup(channel, popup);
+      });
+      entry.unsubscribeRequestFailed = adapter.onRequestFailed((diagnostic) => {
+        this.logRequestFailure(channel, entry, diagnostic);
+      });
+      entry.unsubscribeResponse = adapter.onResponse((diagnostic) => {
+        this.logHttpResponse(channel, entry, diagnostic);
+      });
+      entry.unsubscribeConsole = adapter.onConsole((diagnostic) => {
+        this.logConsoleMessage(channel, entry, diagnostic);
       });
     } catch (error: unknown) {
       this.detachPageListeners(entry);
@@ -539,6 +562,15 @@ export class DefaultBrowserManager implements BrowserManager {
     });
     entry.unsubscribePopup = entry.adapter.onPopup((popup) => {
       void this.closeUnexpectedPopup(channel, popup);
+    });
+    entry.unsubscribeRequestFailed = entry.adapter.onRequestFailed((diagnostic) => {
+      this.logRequestFailure(channel, entry, diagnostic);
+    });
+    entry.unsubscribeResponse = entry.adapter.onResponse((diagnostic) => {
+      this.logHttpResponse(channel, entry, diagnostic);
+    });
+    entry.unsubscribeConsole = entry.adapter.onConsole((diagnostic) => {
+      this.logConsoleMessage(channel, entry, diagnostic);
     });
   }
 
@@ -1192,9 +1224,128 @@ export class DefaultBrowserManager implements BrowserManager {
     entry.unsubscribeCrash();
     entry.unsubscribeClose();
     entry.unsubscribePopup();
+    entry.unsubscribeRequestFailed();
+    entry.unsubscribeResponse();
+    entry.unsubscribeConsole();
     entry.unsubscribeCrash = () => undefined;
     entry.unsubscribeClose = () => undefined;
     entry.unsubscribePopup = () => undefined;
+    entry.unsubscribeRequestFailed = () => undefined;
+    entry.unsubscribeResponse = () => undefined;
+    entry.unsubscribeConsole = () => undefined;
+  }
+
+  private logRequestFailure(
+    channel: string,
+    entry: PageEntry,
+    diagnostic: BrowserRequestFailureDiagnostic,
+  ): void {
+    try {
+      const endpoint = sanitizeBrowserUrl(diagnostic.url);
+      this.logger.warn('browser_request_failed', {
+        channel,
+        browserGeneration: entry.browserGeneration,
+        pageGeneration: entry.pageGeneration,
+        endpointCategory: endpoint.endpointCategory,
+        host: endpoint.host,
+        path: endpoint.path,
+        method: diagnostic.method,
+        resourceType: diagnostic.resourceType,
+        ...(diagnostic.failureText === undefined
+          ? {}
+          : { failureText: diagnostic.failureText }),
+        ...(diagnostic.graphQlOperationNames === undefined ||
+        diagnostic.graphQlOperationNames.length === 0
+          ? {}
+          : { graphQlOperationNames: diagnostic.graphQlOperationNames }),
+      });
+    } catch (error: unknown) {
+      this.logger.debug('browser_diagnostic_failed', {
+        channel,
+        event: 'browser_request_failed',
+        error: this.safeError(error),
+      });
+    }
+  }
+
+  private logHttpResponse(
+    channel: string,
+    entry: PageEntry,
+    diagnostic: BrowserHttpResponseDiagnostic,
+  ): void {
+    try {
+      const endpoint = sanitizeBrowserUrl(diagnostic.url);
+      const level = decideHttpResponseLevel(
+        diagnostic.status,
+        diagnostic.resourceType,
+        endpoint.endpointCategory,
+      );
+      if (level === 'none') {
+        return;
+      }
+      this.logger[level]('browser_http_response', {
+        channel,
+        browserGeneration: entry.browserGeneration,
+        pageGeneration: entry.pageGeneration,
+        endpointCategory: endpoint.endpointCategory,
+        host: endpoint.host,
+        path: endpoint.path,
+        method: diagnostic.method,
+        resourceType: diagnostic.resourceType,
+        httpStatus: diagnostic.status,
+        statusText: diagnostic.statusText,
+        ...(diagnostic.graphQlOperationNames === undefined ||
+        diagnostic.graphQlOperationNames.length === 0
+          ? {}
+          : { graphQlOperationNames: diagnostic.graphQlOperationNames }),
+      });
+    } catch (error: unknown) {
+      this.logger.debug('browser_diagnostic_failed', {
+        channel,
+        event: 'browser_http_response',
+        error: this.safeError(error),
+      });
+    }
+  }
+
+  private logConsoleMessage(
+    channel: string,
+    entry: PageEntry,
+    diagnostic: BrowserConsoleDiagnostic,
+  ): void {
+    try {
+      const level = decideConsoleLevel(diagnostic.type);
+      if (level === 'none') {
+        return;
+      }
+      const source =
+        diagnostic.sourceUrl === undefined
+          ? undefined
+          : sanitizeBrowserUrl(diagnostic.sourceUrl);
+      this.logger[level]('browser_console_message', {
+        channel,
+        browserGeneration: entry.browserGeneration,
+        pageGeneration: entry.pageGeneration,
+        consoleType: diagnostic.type,
+        message: diagnostic.text,
+        ...(source === undefined ? {} : { sourceHost: source.host }),
+        ...(source === undefined || source.path.length === 0
+          ? {}
+          : { sourcePath: source.path }),
+        ...(diagnostic.lineNumber === undefined
+          ? {}
+          : { lineNumber: diagnostic.lineNumber }),
+        ...(diagnostic.columnNumber === undefined
+          ? {}
+          : { columnNumber: diagnostic.columnNumber }),
+      });
+    } catch (error: unknown) {
+      this.logger.debug('browser_diagnostic_failed', {
+        channel,
+        event: 'browser_console_message',
+        error: this.safeError(error),
+      });
+    }
   }
 
   private async notifyInvalidations(

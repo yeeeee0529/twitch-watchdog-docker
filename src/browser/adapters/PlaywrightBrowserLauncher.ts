@@ -26,7 +26,7 @@ const DEFAULT_BROWSER_TYPES: PlaywrightBrowserTypes = {
 
 export class PlaywrightBrowserLauncher implements BrowserLauncher {
   public constructor(
-    private readonly engine: BrowserEngine = 'firefox',
+    private readonly engine: BrowserEngine = 'chromium',
     private readonly browserTypes: PlaywrightBrowserTypes =
       DEFAULT_BROWSER_TYPES,
   ) {}

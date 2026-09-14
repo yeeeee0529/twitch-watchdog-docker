@@ -15,8 +15,8 @@ twitch_api:
   access_token: ""
 
 browser:
-  # Browser engine; Firefox remains the default / 瀏覽器引擎；預設仍為 Firefox
-  engine: firefox
+  # Browser engine; Chromium is the runtime default / 瀏覽器引擎；預設為 Chromium
+  engine: chromium
   navigation_timeout_ms: 30000
   page_health_check_interval_seconds: 60
   reward_check_interval_seconds: 30

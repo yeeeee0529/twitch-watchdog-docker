@@ -4,14 +4,17 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DefaultBrowserManager,
   type BrowserAdapter,
+  type BrowserConsoleDiagnostic,
   type BrowserContextAdapter,
   type BrowserContextOptions,
+  type BrowserHttpResponseDiagnostic,
   type BrowserInvalidation,
   type BrowserLaunchOptions,
   type BrowserLauncher,
   type BrowserManagerConfig,
   type BrowserManagerLogger,
   type BrowserPageAdapter,
+  type BrowserRequestFailureDiagnostic,
 } from '../../src/browser/BrowserManager.js';
 import type { BrowserRecoveryConfig } from '../../src/config/AppConfig.js';
 
@@ -82,6 +85,12 @@ class MockPageAdapter implements BrowserPageAdapter {
   private readonly crashListeners = new Set<() => void>();
   private readonly closeListeners = new Set<() => void>();
   private readonly popupListeners = new Set<(popup: Page) => void>();
+  private readonly requestFailedListeners =
+    new Set<(diagnostic: BrowserRequestFailureDiagnostic) => void>();
+  private readonly responseListeners =
+    new Set<(diagnostic: BrowserHttpResponseDiagnostic) => void>();
+  private readonly consoleListeners =
+    new Set<(diagnostic: BrowserConsoleDiagnostic) => void>();
   private readonly closeFailures: Error[] = [];
   public closeImplementation: (() => Promise<void>) | undefined;
 
@@ -114,6 +123,33 @@ class MockPageAdapter implements BrowserPageAdapter {
     };
   }
 
+  public onRequestFailed(
+    listener: (diagnostic: BrowserRequestFailureDiagnostic) => void,
+  ): () => void {
+    this.requestFailedListeners.add(listener);
+    return () => {
+      this.requestFailedListeners.delete(listener);
+    };
+  }
+
+  public onResponse(
+    listener: (diagnostic: BrowserHttpResponseDiagnostic) => void,
+  ): () => void {
+    this.responseListeners.add(listener);
+    return () => {
+      this.responseListeners.delete(listener);
+    };
+  }
+
+  public onConsole(
+    listener: (diagnostic: BrowserConsoleDiagnostic) => void,
+  ): () => void {
+    this.consoleListeners.add(listener);
+    return () => {
+      this.consoleListeners.delete(listener);
+    };
+  }
+
   public failNextClose(error = new Error('page close failed')): void {
     this.closeFailures.push(error);
   }
@@ -130,6 +166,26 @@ class MockPageAdapter implements BrowserPageAdapter {
   public emitPopup(popup: Page): void {
     for (const listener of [...this.popupListeners]) {
       listener(popup);
+    }
+  }
+
+  public emitRequestFailed(
+    diagnostic: BrowserRequestFailureDiagnostic,
+  ): void {
+    for (const listener of [...this.requestFailedListeners]) {
+      listener(diagnostic);
+    }
+  }
+
+  public emitResponse(diagnostic: BrowserHttpResponseDiagnostic): void {
+    for (const listener of [...this.responseListeners]) {
+      listener(diagnostic);
+    }
+  }
+
+  public emitConsole(diagnostic: BrowserConsoleDiagnostic): void {
+    for (const listener of [...this.consoleListeners]) {
+      listener(diagnostic);
     }
   }
 
@@ -1432,6 +1488,306 @@ describe('DefaultBrowserManager', () => {
     expect(page.close).toHaveBeenCalledOnce();
     expect(context.close).toHaveBeenCalledOnce();
     expect(browser.close).toHaveBeenCalledOnce();
+  });
+
+  it('request failed 記錄含 channel 與 generation 的消毒後端點資訊', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitRequestFailed({
+      url: 'https://static.twitchcdn.net/assets/main.js?token=super-secret&challenge=abc',
+      method: 'GET',
+      resourceType: 'script',
+      failureText: 'net::ERR_ABORTED',
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith('browser_request_failed', {
+      channel: 'channel',
+      browserGeneration: 1,
+      pageGeneration: 1,
+      endpointCategory: 'twitch_javascript',
+      host: 'static.twitchcdn.net',
+      path: '/assets/main.js',
+      method: 'GET',
+      resourceType: 'script',
+      failureText: 'net::ERR_ABORTED',
+    });
+    const serialized = JSON.stringify(vi.mocked(logger.warn).mock.calls);
+    expect(serialized).not.toContain('super-secret');
+    expect(serialized).not.toContain('challenge=abc');
+  });
+
+  it('GraphQL request failed 記錄 operationName 但不記錄 body', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitRequestFailed({
+      url: 'https://gql.twitch.tv/gql?client_id=secret',
+      method: 'POST',
+      resourceType: 'fetch',
+      failureText: 'net::ERR_FAILED',
+      graphQlOperationNames: ['PlaybackAccessToken'],
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'browser_request_failed',
+      expect.objectContaining({
+        channel: 'channel',
+        endpointCategory: 'twitch_graphql',
+        host: 'gql.twitch.tv',
+        path: '/gql',
+        method: 'POST',
+        resourceType: 'fetch',
+        graphQlOperationNames: ['PlaybackAccessToken'],
+      }),
+    );
+  });
+
+  it('5xx 回應以 warn 記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitResponse({
+      url: 'https://static.twitchcdn.net/assets/loader.js',
+      method: 'GET',
+      resourceType: 'script',
+      status: 503,
+      statusText: 'Service Unavailable',
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'browser_http_response',
+      expect.objectContaining({
+        channel: 'channel',
+        endpointCategory: 'twitch_javascript',
+        httpStatus: 503,
+        statusText: 'Service Unavailable',
+      }),
+    );
+  });
+
+  it('4xx document 回應以 warn 記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitResponse({
+      url: 'https://www.twitch.tv/some_channel',
+      method: 'GET',
+      resourceType: 'document',
+      status: 404,
+      statusText: 'Not Found',
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'browser_http_response',
+      expect.objectContaining({
+        channel: 'channel',
+        endpointCategory: 'twitch_document',
+        httpStatus: 404,
+      }),
+    );
+  });
+
+  it('非相關的 4xx 與成功的 media/圖片不記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitResponse({
+      url: 'https://video-weaver.atl01.hls.ttvnw.net/v1/playlist/segment.ts',
+      method: 'GET',
+      resourceType: 'fetch',
+      status: 403,
+      statusText: 'Forbidden',
+    });
+    page.emitResponse({
+      url: 'https://analytics.example.com/track',
+      method: 'POST',
+      resourceType: 'fetch',
+      status: 200,
+      statusText: 'OK',
+    });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.debug).not.toHaveBeenCalled();
+  });
+
+  it('成功的 Twitch bootstrap 回應以 debug 記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitResponse({
+      url: 'https://gql.twitch.tv/gql',
+      method: 'POST',
+      resourceType: 'fetch',
+      status: 200,
+      statusText: 'OK',
+      graphQlOperationNames: ['PlaybackAccessToken'],
+    });
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      'browser_http_response',
+      expect.objectContaining({
+        channel: 'channel',
+        endpointCategory: 'twitch_graphql',
+        httpStatus: 200,
+        graphQlOperationNames: ['PlaybackAccessToken'],
+      }),
+    );
+  });
+
+  it('console error 對應 warn、warning 對應 debug、log 不記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitConsole({
+      type: 'error',
+      text: 'Failed to load resource: token=abc',
+      sourceUrl: 'https://static.twitchcdn.net/app.js?secret=1',
+      lineNumber: 12,
+      columnNumber: 4,
+    });
+    page.emitConsole({
+      type: 'warning',
+      text: 'Deprecated API usage',
+      sourceUrl: 'https://static.twitchcdn.net/legacy.js',
+      lineNumber: 7,
+      columnNumber: 2,
+    });
+    page.emitConsole({ type: 'log', text: 'ordinary log' });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'browser_console_message',
+      expect.objectContaining({
+        channel: 'channel',
+        consoleType: 'error',
+        message: 'Failed to load resource: token=abc',
+        sourceHost: 'static.twitchcdn.net',
+        sourcePath: '/app.js',
+        lineNumber: 12,
+        columnNumber: 4,
+      }),
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      'browser_console_message',
+      expect.objectContaining({
+        channel: 'channel',
+        consoleType: 'warning',
+        message: 'Deprecated API usage',
+        sourceHost: 'static.twitchcdn.net',
+        sourcePath: '/legacy.js',
+      }),
+    );
+    const serialized = JSON.stringify({
+      warn: vi.mocked(logger.warn).mock.calls,
+      debug: vi.mocked(logger.debug).mock.calls,
+    });
+    expect(serialized).not.toContain('secret=1');
+    expect(serialized).not.toContain('ordinary log');
+  });
+
+  it('closePage 與 stop 會移除全部 diagnostics listener', async () => {
+    const closedPage = new MockPageAdapter('closed');
+    const stoppedPage = new MockPageAdapter('stopped');
+    const context = new MockContextAdapter([closedPage, stoppedPage]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('closed');
+    await manager.createPage('stopped');
+
+    await manager.closePage('closed');
+    closedPage.emitRequestFailed({
+      url: 'https://static.twitchcdn.net/after-close.js',
+      method: 'GET',
+      resourceType: 'script',
+    });
+    closedPage.emitConsole({ type: 'error', text: 'after close' });
+    closedPage.emitResponse({
+      url: 'https://static.twitchcdn.net/after-close.js',
+      method: 'GET',
+      resourceType: 'script',
+      status: 500,
+      statusText: 'Error',
+    });
+
+    await manager.stop();
+    stoppedPage.emitRequestFailed({
+      url: 'https://static.twitchcdn.net/after-stop.js',
+      method: 'GET',
+      resourceType: 'script',
+    });
+    stoppedPage.emitConsole({ type: 'error', text: 'after stop' });
+    stoppedPage.emitResponse({
+      url: 'https://static.twitchcdn.net/after-stop.js',
+      method: 'GET',
+      resourceType: 'script',
+      status: 500,
+      statusText: 'Error',
+    });
+
+    const diagnosticEvents = new Set([
+      'browser_request_failed',
+      'browser_http_response',
+      'browser_console_message',
+    ]);
+    for (const [event] of vi.mocked(logger.warn).mock.calls) {
+      expect(diagnosticEvents.has(String(event))).toBe(false);
+    }
+    for (const [event] of vi.mocked(logger.debug).mock.calls) {
+      expect(diagnosticEvents.has(String(event))).toBe(false);
+    }
   });
 });
 

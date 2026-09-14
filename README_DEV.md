@@ -27,14 +27,14 @@
 - Node.js 24 以上。
 - npm 11。
 - Docker Engine 與 Docker Compose plugin。
-- Playwright Firefox browser；進行 engine canary 時也需 Chromium。
-  Playwright Firefox is required by default; Chromium is also required for engine canaries.
+- Playwright Chromium browser；需要 rollback 或對照時也需 Firefox。
+  Playwright Chromium is required by default; Firefox is also required for rollback and comparison.
 
 安裝依賴：
 
 ```bash
 npm ci
-npx playwright install firefox chromium
+npx playwright install chromium firefox
 ```
 
 專案 Playwright 套件與 Docker image 必須同步使用 `1.62.1`。
@@ -138,8 +138,8 @@ Session startup events:
   The shared browser is recycled after two final navigation timeouts for one channel or three across all channels within five minutes. The event observer runs outside the SessionManager reconcile lock to avoid a browser-invalidation/session-lock cycle.
 - `browser_navigation_failure_recycle_failed`：導覽逾時要求的 browser recycle 失敗，直接升級至 fatal container recovery。
   A navigation-timeout-triggered browser recycle failed and escalated directly to fatal container recovery.
-- `browser_navigation_failure_loop`：10 分鐘內累積 3 次 browser failure recovery，不再反覆回收 Firefox，改由 `ContainerRestartController` 要求 Docker 重啟容器。
-  Three browser-failure recoveries accumulated within ten minutes, so Firefox is no longer recycled again and `ContainerRestartController` requests a Docker container restart.
+- `browser_navigation_failure_loop`：10 分鐘內累積 3 次 browser failure recovery，不再反覆回收瀏覽器，改由 `ContainerRestartController` 要求 Docker 重啟容器。
+  Three browser-failure recoveries accumulated within ten minutes, so the browser is no longer recycled again and `ContainerRestartController` requests a Docker container restart.
 
 只有 session 啟動的最終 `page.goto` 逾時納入上述 breaker。`page_refresh_interval_seconds` 定時重整與 `/refresh_now` 手動重整仍完整保留，且其 `page.reload` 逾時不會污染啟動失敗計數。
 Only final session-start `page.goto` timeouts enter this breaker. Scheduled `page_refresh_interval_seconds` reloads and manual `/refresh_now` remain fully supported, and their `page.reload` timeouts do not affect startup-failure counters.
@@ -175,7 +175,7 @@ Useful diagnostic queries:
 
 ```bash
 docker compose logs --no-log-prefix twitch-watchdog \
-  | rg 'scheduler_tick_|scheduler_stall_detected|session_(reconcile|invalidate|start_attempt)|browser_(page_invalidation|resource_close|navigation_failure)|page_crashed|page_closed|page_refresh_failed|resource_guard_|cgroup_|runtime_resource_snapshot|container_restart_requested'
+  | rg 'scheduler_tick_|scheduler_stall_detected|session_(reconcile|invalidate|start_attempt)|browser_(page_invalidation|resource_close|navigation_failure|request_failed|http_response|console_message)|page_crashed|page_closed|page_refresh_failed|resource_guard_|cgroup_|runtime_resource_snapshot|container_restart_requested'
 ```
 
 重點事件：
@@ -205,9 +205,18 @@ Important events:
   Reports queue time, execution time, outcome, or skip reason for health checks, reward claims, point reads, screenshots, quality enforcement, and reloads. Operations on the same page run sequentially; session shutdown drains the queue for up to five seconds, then logs `session_page_operation_drain_timeout` and force-closes the page.
 - `side_nav_collapsed` / `side_nav_collapse_skipped`：啟動或 reload 後的 Twitch 左側欄收合結果；找不到按鈕或側欄已收合時不會輸出失敗事件。
   Reports Twitch sidebar collapse outcomes after startup or reload. A missing toggle or an already-collapsed sidebar is not treated as a failure.
+- `browser_request_failed`（warn）：Playwright `requestfailed`。欄位：`channel`、`browserGeneration`、`pageGeneration`、`endpointCategory`、`host`、`path`、`method`、`resourceType`、`failureText`，GraphQL 請求另附 `graphQlOperationNames`。正常沒有 HTTP status。
+  Playwright `requestfailed` with `channel`, `browserGeneration`, `pageGeneration`, `endpointCategory`, `host`, `path`, `method`, `resourceType`, `failureText`, plus `graphQlOperationNames` for GraphQL requests. There is normally no HTTP status.
+- `browser_http_response`：非成功回應記錄（500+ 全部 warn；400–499 僅 document、script、fetch/XHR、GraphQL 或 Twitch anti-abuse 請求以 warn 記錄）；`log_level: debug` 時，成功的 Twitch bootstrap 回應（document、script、GraphQL、API）以 debug 記錄。例行 media segment、圖片、字型與第三方分析不記錄。
+  Non-success responses are logged (500+ warn for all; 400–499 warn only for document, script, fetch/XHR, GraphQL, or Twitch anti-abuse requests). With `log_level: debug`, successful Twitch bootstrap responses (document, script, GraphQL, API) log at debug. Routine media segments, images, fonts, and third-party analytics are excluded.
+- `browser_console_message`：console `error` 對應 warn、`warning` 對應 debug；一般 `log`/`info`/`debug`/table/timing/trace 不記錄。欄位：`consoleType`、`message`（bounded 且經通用遮罩）、`sourceHost`/`sourcePath`（如有）、`lineNumber`/`columnNumber`（如有）。console argument 一律不序列化。
+  Console `error` maps to warn and `warning` to debug; ordinary `log`/`info`/`debug`/table/timing/trace messages are ignored. Fields: `consoleType`, `message` (bounded and generically redacted), `sourceHost`/`sourcePath` when available, and `lineNumber`/`columnNumber` when available. Console arguments are never serialized.
 
-`cgroupCpuUsageUsec`、`cgroupCpuUserUsec` 與 `cgroupCpuSystemUsec` 是容器自啟動以來的累計微秒數；比較相鄰 snapshot 的差值可計算整個 cgroup（包含 Firefox）的 CPU 使用量。`npm run benchmark:csv` 會保留這些欄位。
-`cgroupCpuUsageUsec`, `cgroupCpuUserUsec`, and `cgroupCpuSystemUsec` are cumulative microseconds since the container started. Compare deltas between adjacent snapshots to calculate whole-cgroup CPU usage, including Firefox. `npm run benchmark:csv` preserves these fields.
+瀏覽器診斷 URL 只保留 hostname 與 pathname；query string、fragment、credentials、port、cookie、request/response body 與 GraphQL variables 一律不記錄。console 與失敗訊息會先套用通用 `redactSensitiveString()` 再依上限裁切。`endpointCategory` 分類為 `twitch_document`、`twitch_javascript`、`twitch_graphql`、`twitch_anti_abuse`、`twitch_api`、`twitch_media`、`twitch_other`、`third_party`、`unknown`，規則刻意保守，分類只描述觀測到的端點。
+Browser diagnostics keep only the URL hostname and pathname; query strings, fragments, credentials, ports, cookies, request/response bodies, and GraphQL variables are never logged. Console and failure messages pass through the generic `redactSensitiveString()` before bounded truncation. `endpointCategory` classifies endpoints as `twitch_document`, `twitch_javascript`, `twitch_graphql`, `twitch_anti_abuse`, `twitch_api`, `twitch_media`, `twitch_other`, `third_party`, or `unknown`; rules are intentionally conservative and only describe the observed endpoint.
+
+`cgroupCpuUsageUsec`、`cgroupCpuUserUsec` 與 `cgroupCpuSystemUsec` 是容器自啟動以來的累計微秒數；比較相鄰 snapshot 的差值可計算整個 cgroup（包含瀏覽器）的 CPU 使用量。`npm run benchmark:csv` 會保留這些欄位。
+`cgroupCpuUsageUsec`, `cgroupCpuUserUsec`, and `cgroupCpuSystemUsec` are cumulative microseconds since the container started. Compare deltas between adjacent snapshots to calculate whole-cgroup CPU usage, including the browser. `npm run benchmark:csv` preserves these fields.
 
 啟用 resource guard 時，高頻政策採樣只讀 `memory.current`、`memory.events` 與 `memory.swap.current`；啟動及 `resource_telemetry_interval_seconds` 週期才讀取包含 `memory.max`、`memory.peak`、`pids.current` 與 `cpu.stat` 的完整 snapshot。預設 2 秒 guard、60 秒 telemetry 下，cgroup metric 讀檔量約由每分鐘 210 次降至 94 次，同時維持原有政策決策頻率。
 When the resource guard is enabled, high-frequency policy samples read only `memory.current`, `memory.events`, and `memory.swap.current`. Startup and `resource_telemetry_interval_seconds` intervals use full snapshots that also include `memory.max`, `memory.peak`, `pids.current`, and `cpu.stat`. With the default 2-second guard and 60-second telemetry cadence, cgroup metric reads drop from approximately 210 to 94 per minute while preserving the existing policy decision frequency.
@@ -238,9 +247,9 @@ When sharing logs for debugging, include `scheduler_tick_*`, `session_*`, `brows
 - `ContainerRestartController` is the single-flight fatal exit path (`container_restart_requested` once, flush ≤5s, `exit(1)`).
 - Sources: resource guard, scheduler stall, reward escalation, browser fatal recovery.
 - Browser close timeout is **not** success. Page close hang schedules a full browser recycle asynchronously (no same-context page replace; avoids SessionManager/BrowserManager lock cycles).
-- Replacement Firefox launches only after `isConnected() === false` on the old browser; otherwise container restart.
+- Replacement browser launches only after `isConnected() === false` on the old browser; otherwise container restart.
 - Automatic restart exhaustion and crash-loop windows escalate to container restart.
-- Final session-start navigation timeouts use a five-minute breaker: 2 for one channel or 3 globally recycle Firefox. Three browser-failure recoveries within ten minutes escalate to container restart.
+- Final session-start navigation timeouts use a five-minute breaker: 2 for one channel or 3 globally recycle the browser. Three browser-failure recoveries within ten minutes escalate to container restart.
 - Scheduled/manual reload remains enabled when configured and is deliberately excluded from the session-start navigation breaker.
 
 ## 維護原則

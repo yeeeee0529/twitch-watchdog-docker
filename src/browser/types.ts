@@ -39,6 +39,43 @@ export interface BrowserPageAdapter {
   onCrash(listener: () => void): () => void;
   onClose(listener: () => void): () => void;
   onPopup(listener: (popup: Page) => void): () => void;
+  onRequestFailed(
+    listener: (diagnostic: BrowserRequestFailureDiagnostic) => void,
+  ): () => void;
+  onResponse(
+    listener: (diagnostic: BrowserHttpResponseDiagnostic) => void,
+  ): () => void;
+  onConsole(
+    listener: (diagnostic: BrowserConsoleDiagnostic) => void,
+  ): () => void;
+}
+
+/** Sanitized Playwright `requestfailed` diagnostic. URL carries no query, fragment, or credentials. */
+export interface BrowserRequestFailureDiagnostic {
+  readonly url: string;
+  readonly method: string;
+  readonly resourceType: string;
+  readonly failureText?: string;
+  readonly graphQlOperationNames?: readonly string[];
+}
+
+/** Sanitized Playwright `response` diagnostic for non-success or bootstrap-relevant responses. */
+export interface BrowserHttpResponseDiagnostic {
+  readonly url: string;
+  readonly method: string;
+  readonly resourceType: string;
+  readonly status: number;
+  readonly statusText: string;
+  readonly graphQlOperationNames?: readonly string[];
+}
+
+/** Sanitized Playwright `console` diagnostic. Arguments are never serialized. */
+export interface BrowserConsoleDiagnostic {
+  readonly type: string;
+  readonly text: string;
+  readonly sourceUrl?: string;
+  readonly lineNumber?: number;
+  readonly columnNumber?: number;
 }
 
 export interface BrowserContextAdapter {
@@ -161,6 +198,9 @@ export interface PageEntry {
   unsubscribeCrash: () => void;
   unsubscribeClose: () => void;
   unsubscribePopup: () => void;
+  unsubscribeRequestFailed: () => void;
+  unsubscribeResponse: () => void;
+  unsubscribeConsole: () => void;
 }
 
 export interface DetachedResources {

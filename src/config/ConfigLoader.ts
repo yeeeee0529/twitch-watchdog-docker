@@ -30,7 +30,7 @@ const DEFAULT_MAX_CONCURRENT_STREAMS = 3;
 const DEFAULT_STORAGE_STATE_PATH =
   '/data/browser-state/storage-state.json';
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 30_000;
-const DEFAULT_BROWSER_ENGINE: BrowserEngine = 'firefox';
+const DEFAULT_BROWSER_ENGINE: BrowserEngine = 'chromium';
 const DEFAULT_PAGE_HEALTH_CHECK_INTERVAL_SECONDS = 60;
 const DEFAULT_REWARD_CHECK_INTERVAL_SECONDS = 30;
 /** Disabled by default to reduce Firefox lifecycle churn and memory pressure. */

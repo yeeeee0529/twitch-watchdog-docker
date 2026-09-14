@@ -133,7 +133,7 @@ describe('YamlConfigLoader', () => {
       'your_twitch_client_secret',
     );
     expect(config.browser.pageRefreshIntervalSeconds).toBe(0);
-    expect(config.browser.engine).toBe('firefox');
+    expect(config.browser.engine).toBe('chromium');
     expect(config.browser.resourceTelemetryIntervalSeconds).toBe(60);
     expect(config.browser.recovery.pageCrashBackoffSeconds).toEqual([
       30,
@@ -320,7 +320,7 @@ twitch_api:
         clientSecret: '',
       },
       browser: {
-        engine: 'firefox',
+        engine: 'chromium',
         navigationTimeoutMs: 30_000,
         pageHealthCheckIntervalSeconds: 60,
         rewardCheckIntervalSeconds: 30,
@@ -418,6 +418,43 @@ twitch_api:
 
     expect(config.maxConcurrentStreams).toBe(3);
     expect(debug).not.toHaveBeenCalled();
+  });
+
+  it('未指定 browser.engine 時預設為 chromium', async () => {
+    const config = await loadSource(
+      'channels: [streamer]\n'
+      + 'twitch_api:\n'
+      + '  client_id: fixture-client-id\n'
+      + '  access_token: fixture-access-token\n',
+    );
+
+    expect(config.browser.engine).toBe('chromium');
+  });
+
+  it('明確指定 firefox 仍受支援', async () => {
+    const config = await loadSource(
+      'channels: [streamer]\n'
+      + 'twitch_api:\n'
+      + '  client_id: fixture-client-id\n'
+      + '  access_token: fixture-access-token\n'
+      + 'browser:\n'
+      + '  engine: firefox\n',
+    );
+
+    expect(config.browser.engine).toBe('firefox');
+  });
+
+  it('明確指定 chromium 仍受支援', async () => {
+    const config = await loadSource(
+      'channels: [streamer]\n'
+      + 'twitch_api:\n'
+      + '  client_id: fixture-client-id\n'
+      + '  access_token: fixture-access-token\n'
+      + 'browser:\n'
+      + '  engine: chromium\n',
+    );
+
+    expect(config.browser.engine).toBe('chromium');
   });
 
   it('顯式併發數大於頻道數時降級並輸出 debug 事件', async () => {

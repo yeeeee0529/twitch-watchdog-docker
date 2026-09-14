@@ -190,6 +190,18 @@ class TestPageAdapter implements BrowserPageAdapter {
     };
   }
 
+  public onRequestFailed(): () => void {
+    return () => undefined;
+  }
+
+  public onResponse(): () => void {
+    return () => undefined;
+  }
+
+  public onConsole(): () => void {
+    return () => undefined;
+  }
+
   public emitCrash(): void {
     for (const listener of [...this.crashListeners]) {
       listener();
