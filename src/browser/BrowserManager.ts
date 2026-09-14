@@ -8,6 +8,7 @@ import { PlaywrightBrowserLauncher } from './adapters/PlaywrightBrowserLauncher.
 import {
   decideConsoleLevel,
   decideHttpResponseLevel,
+  decideRequestFailureLevel,
   sanitizeBrowserUrl,
 } from './browser-diagnostics.js';
 import type {
@@ -1242,7 +1243,14 @@ export class DefaultBrowserManager implements BrowserManager {
   ): void {
     try {
       const endpoint = sanitizeBrowserUrl(diagnostic.url);
-      this.logger.warn('browser_request_failed', {
+      const level = decideRequestFailureLevel(
+        endpoint.endpointCategory,
+        diagnostic.failureText,
+      );
+      if (level === 'none') {
+        return;
+      }
+      this.logger[level]('browser_request_failed', {
         channel,
         browserGeneration: entry.browserGeneration,
         pageGeneration: entry.pageGeneration,

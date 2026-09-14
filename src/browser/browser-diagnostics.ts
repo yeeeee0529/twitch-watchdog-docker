@@ -244,6 +244,32 @@ export function decideHttpResponseLevel(
 }
 
 /**
+ * Decide the log level for a failed request. Tracking and analytics
+ * hosts blocked by the local network, unknown hosts, and media segments
+ * aborted by a quality switch are routine noise and map to `debug`;
+ * failures on Twitch core endpoints stay at `warn`.
+ */
+export function decideRequestFailureLevel(
+  endpointCategory: EndpointCategory,
+  failureText: string | undefined,
+): DiagnosticLogLevel {
+  if (
+    endpointCategory === 'third_party' ||
+    endpointCategory === 'twitch_other' ||
+    endpointCategory === 'unknown'
+  ) {
+    return 'debug';
+  }
+  if (
+    endpointCategory === 'twitch_media' &&
+    failureText === 'net::ERR_ABORTED'
+  ) {
+    return 'debug';
+  }
+  return 'warn';
+}
+
+/**
  * Map a console message type to a log level: `error` maps to `warn`,
  * `warning`/`warn` to `debug`, and ordinary `log`, `info`, `debug`,
  * table, timing, and trace messages are ignored.

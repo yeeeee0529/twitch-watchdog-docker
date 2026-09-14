@@ -8,6 +8,7 @@ import {
   REDACTED_URL,
   decideConsoleLevel,
   decideHttpResponseLevel,
+  decideRequestFailureLevel,
   extractGraphQlOperationNames,
   sanitizeBrowserUrl,
   truncateText,
@@ -196,6 +197,31 @@ describe('decideHttpResponseLevel', () => {
       ).toBe(expected);
     },
   );
+});
+
+describe('decideRequestFailureLevel', () => {
+  it.each([
+    ['third_party', 'net::ERR_CONNECTION_REFUSED', 'debug'],
+    ['third_party', 'net::ERR_ABORTED', 'debug'],
+    ['third_party', undefined, 'debug'],
+    ['twitch_other', 'net::ERR_CONNECTION_REFUSED', 'debug'],
+    ['unknown', 'net::ERR_FAILED', 'debug'],
+    ['twitch_media', 'net::ERR_ABORTED', 'debug'],
+    ['twitch_media', 'net::ERR_CONNECTION_REFUSED', 'warn'],
+    ['twitch_media', undefined, 'warn'],
+    ['twitch_document', 'net::ERR_ABORTED', 'warn'],
+    ['twitch_javascript', 'net::ERR_ABORTED', 'warn'],
+    ['twitch_graphql', 'net::ERR_FAILED', 'warn'],
+    ['twitch_api', 'net::ERR_CONNECTION_REFUSED', 'warn'],
+    ['twitch_anti_abuse', 'net::ERR_FAILED', 'warn'],
+  ])('%s / %s → %s', (category, failureText, expected) => {
+    expect(
+      decideRequestFailureLevel(
+        category as Parameters<typeof decideRequestFailureLevel>[0],
+        failureText as string | undefined,
+      ),
+    ).toBe(expected);
+  });
 });
 
 describe('decideConsoleLevel', () => {

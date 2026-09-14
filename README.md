@@ -237,7 +237,7 @@ docker compose logs --no-log-prefix twitch-watchdog \
 
 每個受管理的頻道頁面都會安裝請求與 console 診斷，輸出三個新事件：
 
-- `browser_request_failed`（warn）：Playwright `requestfailed`，記錄 `endpointCategory`、`host`、`path`、`method`、`resourceType`、`failureText` 與（GraphQL 請求時）`graphQlOperationNames`。
+- `browser_request_failed`（warn / debug）：Playwright `requestfailed`，記錄 `endpointCategory`、`host`、`path`、`method`、`resourceType`、`failureText` 與（GraphQL 請求時）`graphQlOperationNames`。Twitch 核心端點（document、script、GraphQL、API、anti-abuse）與非中斷型 media 失敗以 warn 記錄；第三方追蹤/分析（`third_party`、`twitch_other`、`unknown`）與換畫質時被中斷的 media segment（`net::ERR_ABORTED`）以 debug 記錄。
 - `browser_http_response`（warn / debug）：非成功 HTTP 回應以 warn 記錄；`log_level: debug` 時，成功的 Twitch bootstrap 回應（document、script、GraphQL、API）以 debug 記錄。例行 media segment、圖片、字型與第三方分析不記錄。
 - `browser_console_message`（warn / debug）：console `error` 以 warn、`warning` 以 debug 記錄；一般 `log` 訊息不記錄。
 
@@ -245,7 +245,7 @@ docker compose logs --no-log-prefix twitch-watchdog \
 
 Every managed channel page installs request and console diagnostics, emitting three new events:
 
-- `browser_request_failed` (warn): Playwright `requestfailed` with `endpointCategory`, `host`, `path`, `method`, `resourceType`, `failureText`, and `graphQlOperationNames` for GraphQL requests.
+- `browser_request_failed` (warn / debug): Playwright `requestfailed` with `endpointCategory`, `host`, `path`, `method`, `resourceType`, `failureText`, and `graphQlOperationNames` for GraphQL requests. Failures on Twitch core endpoints (document, script, GraphQL, API, anti-abuse) and non-aborted media log at warn; third-party tracking/analytics (`third_party`, `twitch_other`, `unknown`) and media segments aborted by a quality switch (`net::ERR_ABORTED`) log at debug.
 - `browser_http_response` (warn / debug): non-success HTTP responses log at warn; with `log_level: debug`, successful Twitch bootstrap responses (document, script, GraphQL, API) log at debug. Routine media segments, images, fonts, and third-party analytics are excluded.
 - `browser_console_message` (warn / debug): console `error` maps to warn, `warning` to debug; ordinary `log` messages are ignored.
 

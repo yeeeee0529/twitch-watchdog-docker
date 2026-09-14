@@ -1557,6 +1557,69 @@ describe('DefaultBrowserManager', () => {
     );
   });
 
+  it('third_party request failed 以 debug 記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitRequestFailed({
+      url: 'https://spade.twitch.tv/track',
+      method: 'POST',
+      resourceType: 'xhr',
+      failureText: 'net::ERR_CONNECTION_REFUSED',
+    });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledWith(
+      'browser_request_failed',
+      expect.objectContaining({
+        channel: 'channel',
+        endpointCategory: 'twitch_other',
+        host: 'spade.twitch.tv',
+        path: '/track',
+        method: 'POST',
+        resourceType: 'xhr',
+        failureText: 'net::ERR_CONNECTION_REFUSED',
+      }),
+    );
+  });
+
+  it('twitch_media ERR_ABORTED request failed 以 debug 記錄', async () => {
+    const page = new MockPageAdapter('channel');
+    const context = new MockContextAdapter([page]);
+    const logger = createLogger();
+    const manager = new DefaultBrowserManager(createConfig(), {
+      launcher: new MockLauncher([new MockBrowserAdapter(context)]),
+      logger,
+    });
+    await manager.start();
+    await manager.createPage('channel');
+
+    page.emitRequestFailed({
+      url: 'https://video-weaver.atl01.hls.ttvnw.net/v1/segment/part.ts',
+      method: 'GET',
+      resourceType: 'fetch',
+      failureText: 'net::ERR_ABORTED',
+    });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledWith(
+      'browser_request_failed',
+      expect.objectContaining({
+        channel: 'channel',
+        endpointCategory: 'twitch_media',
+        host: 'video-weaver.atl01.hls.ttvnw.net',
+        failureText: 'net::ERR_ABORTED',
+      }),
+    );
+  });
+
   it('5xx 回應以 warn 記錄', async () => {
     const page = new MockPageAdapter('channel');
     const context = new MockContextAdapter([page]);
