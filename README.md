@@ -310,6 +310,12 @@ Telegram chat IDs must be quoted integer strings such as `"5009748887"` or `"-10
 - `/screenshot 頻道名稱`：回傳指定觀看中頻道截圖。
 - `/help`：顯示指令說明。
 
+Telegram 的 `/points` 與 `/screenshot` 在背景執行，不會阻塞 `/status` 或後續收訊。同時最多處理兩筆點數／截圖指令，30 秒未完成會回覆逾時；底層頁面操作結束前仍占用名額，避免反覆重試堆積。逾時或服務停止後不再傳送晚到的結果。若持續收到忙碌回覆，請查看服務紀錄中的 `telegram_query_timeout` 與頁面操作紀錄。
+Telegram runs `/points` and `/screenshot` in the background so `/status` and polling remain responsive. At most two queries run at once; after 30 seconds the bot replies with a timeout. A query retains its slot until its underlying page operation finishes to prevent retry buildup. Late results are suppressed after timeout or shutdown. If busy replies persist, inspect `telegram_query_timeout` and page-operation logs.
+
+Telegram 收訊的網路逾時為 `polling_timeout_seconds` 加 10 秒；逾時會記錄 `telegram_poll_failed` 並依既有退避機制重試。
+Telegram polling has a network deadline of `polling_timeout_seconds` plus 10 seconds. Timeouts log `telegram_poll_failed` and retry with the existing backoff.
+
 Bot 主動推播：服務啟動／停止、開台／下播、忠誠點數成功或 click 失敗、page crash、browser 重啟、容器即將重啟（致命錯誤）。定時／手動重整**不會**推播。
 Proactive bot pushes: service start/stop, stream online/offline, reward claimed or click failure, page crash, browser restart, and upcoming container restart (fatal path). Scheduled/manual player refresh does **not** push.
 

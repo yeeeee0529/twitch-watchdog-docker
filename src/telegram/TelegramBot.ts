@@ -41,6 +41,9 @@ export interface TelegramBotOptions {
   readonly sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
 
+const QUERY_TIMEOUT_MS = 30_000;
+const MAX_ACTIVE_QUERIES = 2;
+
 const DEFAULT_SLEEP = async (
   milliseconds: number,
   signal: AbortSignal,
@@ -68,6 +71,7 @@ export class DefaultTelegramBot implements TelegramBot {
   private pollingFlight: Promise<void> | undefined;
   private offset: number | undefined;
   private started = false;
+  private readonly queryFlights = new Set<Promise<void>>();
 
   public constructor(private readonly options: TelegramBotOptions) {
     this.allowedChatIds = new Set(
@@ -242,7 +246,8 @@ export class DefaultTelegramBot implements TelegramBot {
         await this.refreshPages(chatId, argument);
         return;
       case 'points':
-        await this.sendChannelPoints(chatId, argument);
+        await this.startQuery(chatId, command, (signal) =>
+          this.sendChannelPoints(chatId, argument, signal));
         return;
       case 'config':
         await this.options.api.sendMessage(
@@ -287,7 +292,8 @@ export class DefaultTelegramBot implements TelegramBot {
         await this.options.api.sendMessage(chatId, '自動檢查已恢復。');
         return;
       case 'screenshot':
-        await this.sendScreenshot(chatId, argument);
+        await this.startQuery(chatId, command, (signal) =>
+          this.sendScreenshot(chatId, argument, signal));
         return;
       default:
         await this.options.api.sendMessage(
@@ -297,9 +303,71 @@ export class DefaultTelegramBot implements TelegramBot {
     }
   }
 
+  private async startQuery(
+    chatId: string,
+    command: string,
+    operation: (signal: AbortSignal) => Promise<void>,
+  ): Promise<void> {
+    const shutdownSignal = this.abortController?.signal;
+    if (shutdownSignal === undefined || shutdownSignal.aborted) {
+      return;
+    }
+    if (this.queryFlights.size >= MAX_ACTIVE_QUERIES) {
+      await this.options.api.sendMessage(
+        chatId,
+        '查詢仍在處理中，請稍後再試；可用 /status 查看服務狀態。',
+      );
+      return;
+    }
+
+    const controller = new AbortController();
+    const signal = AbortSignal.any([shutdownSignal, controller.signal]);
+    const timeoutHandle = setTimeout(() => {
+      controller.abort();
+      this.options.logger.warn('telegram_query_timeout', { command });
+      void this.options.api.sendMessage(
+        chatId,
+        `/${command} 處理逾時，請稍後再試；可用 /status 查看服務狀態。`,
+      ).catch((error: unknown) => {
+        this.options.logger.warn('telegram_send_failed', {
+          ...describeTelegramError(error),
+          retryInMs: 0,
+        });
+      });
+    }, QUERY_TIMEOUT_MS);
+    const cancelTimeout = (): void => clearTimeout(timeoutHandle);
+    shutdownSignal.addEventListener('abort', cancelTimeout, { once: true });
+
+    // 底層頁面工作結束前保留名額，避免逾時後重試造成無限排隊。
+    const flight = operation(signal).catch(async (error: unknown) => {
+      if (signal.aborted) {
+        return;
+      }
+      this.options.logger.warn('telegram_query_failed', {
+        command,
+        ...describeTelegramError(error),
+      });
+      await this.options.api.sendMessage(
+        chatId,
+        `/${command} 處理失敗，請稍後再試。`,
+      );
+    }).catch((error: unknown) => {
+      this.options.logger.warn('telegram_send_failed', {
+        ...describeTelegramError(error),
+        retryInMs: 0,
+      });
+    }).finally(() => {
+      cancelTimeout();
+      shutdownSignal.removeEventListener('abort', cancelTimeout);
+      this.queryFlights.delete(flight);
+    });
+    this.queryFlights.add(flight);
+  }
+
   private async sendScreenshot(
     chatId: string,
     requestedChannel: string | undefined,
+    signal: AbortSignal,
   ): Promise<void> {
     if (requestedChannel === undefined) {
       const activeChannels = this.options.commandContext.getActiveChannels();
@@ -313,7 +381,9 @@ export class DefaultTelegramBot implements TelegramBot {
 
       let sentCount = 0;
       for (const channel of activeChannels) {
+        signal.throwIfAborted();
         const screenshot = await this.captureScreenshotSafely(channel);
+        signal.throwIfAborted();
         if (screenshot === undefined) {
           continue;
         }
@@ -331,6 +401,7 @@ export class DefaultTelegramBot implements TelegramBot {
     }
 
     const screenshot = await this.captureScreenshotSafely(requestedChannel);
+    signal.throwIfAborted();
     if (screenshot === undefined) {
       const activeChannels = this.options.commandContext.getActiveChannels();
       const requestedIsActive = activeChannels.some(
@@ -411,9 +482,11 @@ export class DefaultTelegramBot implements TelegramBot {
   private async sendChannelPoints(
     chatId: string,
     requestedChannel: string | undefined,
+    signal: AbortSignal,
   ): Promise<void> {
     const results =
       await this.options.commandContext.getChannelPoints(requestedChannel);
+    signal.throwIfAborted();
     if (results.length === 0) {
       const activeChannels = this.options.commandContext.getActiveChannels();
       await this.options.api.sendMessage(

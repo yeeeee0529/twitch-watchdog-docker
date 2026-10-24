@@ -85,6 +85,108 @@ describe('DefaultTelegramBot', () => {
     expect(harness.api.getUpdates.mock.calls[1]?.[0]).toBe(9);
   });
 
+  it.each(['/points', '/screenshot'])('%s 卡住時仍接收下一輪 /status 並可停止', async (command) => {
+    const harness = createHarness([update(1, '42', command)]);
+    let finish: (() => void) | undefined;
+    const pending = new Promise<undefined>((resolve) => {
+      finish = () => resolve(undefined);
+    });
+    if (command === '/points') {
+      harness.sessionManager.getChannelPoints.mockImplementation(async () => {
+        await pending;
+        return [];
+      });
+    } else {
+      harness.sessionManager.captureScreenshot.mockReturnValue(pending);
+    }
+    harness.api.getUpdates.mockResolvedValueOnce([update(1, '42', command)])
+      .mockResolvedValueOnce([update(2, '42', '/status')])
+      .mockImplementation(async (_offset, _timeout, signal) => {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return [];
+      });
+
+    await harness.bot.start();
+    await vi.waitFor(() => {
+      expect(harness.api.sendMessage.mock.calls.some(([, text]) =>
+        text.includes('正在觀看：first、second'))).toBe(true);
+    });
+    await harness.bot.stop('test');
+    const messageCount = harness.api.sendMessage.mock.calls.length;
+    finish?.();
+    await flushQueries();
+    expect(harness.api.sendMessage).toHaveBeenCalledTimes(messageCount);
+    expect(harness.api.sendPhoto).not.toHaveBeenCalled();
+  });
+
+  it('查詢逾時會回覆、保留名額，並抑制稍後完成的結果', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness([
+        update(1, '42', '/points'),
+        update(2, '42', '/screenshot'),
+        update(3, '42', '/points'),
+        update(4, '42', '/status'),
+      ]);
+      let finish: (() => void) | undefined;
+      const pending = new Promise<void>((resolve) => { finish = resolve; });
+      harness.sessionManager.getChannelPoints.mockImplementation(async () => {
+        await pending;
+        return [{ channel: 'first', status: 'available', balance: 1000, displayValue: '1K' }];
+      });
+      harness.sessionManager.captureScreenshot.mockImplementation(async () => {
+        await pending;
+        return { channel: 'first', image: Buffer.from('png') };
+      });
+      let deliver: ((updates: readonly TelegramUpdate[]) => void) | undefined;
+      harness.api.getUpdates.mockResolvedValueOnce([
+        update(1, '42', '/points'),
+        update(2, '42', '/screenshot'),
+        update(3, '42', '/points'),
+        update(4, '42', '/status'),
+      ]).mockImplementation(async (_offset, _timeout, signal) =>
+        new Promise<readonly TelegramUpdate[]>((resolve) => {
+          deliver = resolve;
+          signal.addEventListener('abort', () => resolve([]), { once: true });
+        }));
+      await harness.bot.start();
+      await flushQueries();
+      expect(harness.sessionManager.getChannelPoints).toHaveBeenCalledOnce();
+      expect(harness.api.sendMessage.mock.calls.some(([, text]) => text.includes('查詢仍在處理中'))).toBe(true);
+      expect(harness.api.sendMessage.mock.calls.some(([, text]) => text.includes('正在觀看：first、second'))).toBe(true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(harness.logger.warn).toHaveBeenCalledWith('telegram_query_timeout', { command: 'points' });
+      expect(harness.logger.warn).toHaveBeenCalledWith('telegram_query_timeout', { command: 'screenshot' });
+      expect(harness.api.sendMessage.mock.calls.filter(([, text]) => text.includes('處理逾時'))).toHaveLength(2);
+      deliver?.([update(5, '42', '/points')]);
+      await flushQueries();
+      expect(harness.sessionManager.getChannelPoints).toHaveBeenCalledOnce();
+      finish?.();
+      await flushQueries();
+      expect(harness.api.sendPhoto).not.toHaveBeenCalled();
+      expect(harness.api.sendMessage.mock.calls.some(([, text]) => text.startsWith('忠誠點數：'))).toBe(false);
+      deliver?.([update(6, '42', '/points')]);
+      await flushQueries();
+      expect(harness.sessionManager.getChannelPoints).toHaveBeenCalledTimes(2);
+      expect(harness.api.sendMessage.mock.calls.some(([, text]) => text.startsWith('忠誠點數：'))).toBe(true);
+      await harness.bot.stop('test');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('背景查詢失敗會回覆且釋放名額', async () => {
+    const harness = createHarness([update(1, '42', '/points')]);
+    harness.sessionManager.getChannelPoints.mockRejectedValueOnce(new Error('page failed'));
+    await harness.bot.start();
+    await vi.waitFor(() => {
+      expect(harness.api.sendMessage).toHaveBeenCalledWith('42', '/points 處理失敗，請稍後再試。');
+    });
+    await harness.bot.stop('test');
+  });
+
   it('忽略未授權 chat 且不執行管理指令', async () => {
     const harness = createHarness([update(1, '99', '/pause')]);
 
@@ -618,4 +720,10 @@ function update(
       chat: { id: chatId },
     },
   };
+}
+
+async function flushQueries(): Promise<void> {
+  for (let index = 0; index < 40; index += 1) {
+    await Promise.resolve();
+  }
 }

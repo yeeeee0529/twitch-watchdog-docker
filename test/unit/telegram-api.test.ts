@@ -108,6 +108,47 @@ describe('TelegramApiClient', () => {
     expect((photo as Blob).type).toBe('image/png');
   });
 
+  it.each(['request', 'body'])('getUpdates 的 %s 卡住時會逾時，後續可重試', async (stage) => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutController.signal);
+    const fetchMock = vi.fn<typeof fetch>(async (_url, options) => {
+      const signal = options?.signal;
+      const hang = () => new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+      if (stage === 'request') {
+        return hang();
+      }
+      return { ok: true, status: 200, json: hang } as unknown as Response;
+    });
+    const client = new TelegramApiClient({ botToken: 'test-token', fetch: fetchMock });
+    try {
+      const result = captureError(client.getUpdates(undefined, 25, new AbortController().signal));
+      await Promise.resolve();
+      expect(timeoutSpy).toHaveBeenCalledWith(35_000);
+      timeoutController.abort(new DOMException('Timed out', 'TimeoutError'));
+      await expect(result).resolves.toMatchObject({ errorCategory: 'timeout' });
+      timeoutSpy.mockRestore();
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, result: [] })));
+      await expect(client.getUpdates(undefined, 25, new AbortController().signal)).resolves.toEqual([]);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('停止訊號會取消 getUpdates', async () => {
+    const controller = new AbortController();
+    const client = new TelegramApiClient({
+      botToken: 'test-token',
+      fetch: vi.fn<typeof fetch>(async (_url, options) => new Promise<never>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      })),
+    });
+    const result = captureError(client.getUpdates(undefined, 25, controller.signal));
+    controller.abort();
+    await expect(result).resolves.toMatchObject({ errorCategory: 'aborted' });
+  });
+
   it('網路錯誤不包含 bot token 或完整 URL', async () => {
     const secret = '123456:telegram-secret';
     const client = new TelegramApiClient({

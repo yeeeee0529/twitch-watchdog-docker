@@ -163,7 +163,10 @@ export class TelegramApiClient implements TelegramApi {
         timeout: timeoutSeconds,
         allowed_updates: ['message'],
       },
-      signal,
+      AbortSignal.any([
+        signal,
+        AbortSignal.timeout(timeoutSeconds * 1_000 + SEND_TIMEOUT_MS),
+      ]),
     );
   }
 
@@ -243,6 +246,9 @@ export class TelegramApiClient implements TelegramApi {
     try {
       payload = await response.json() as TelegramResponse<T>;
     } catch {
+      if (signal?.aborted === true) {
+        throw createAbortError(method, signal);
+      }
       throw new TelegramApiError(
         method,
         'Telegram returned invalid JSON',

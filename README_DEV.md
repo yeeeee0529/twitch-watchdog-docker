@@ -252,6 +252,19 @@ When sharing logs for debugging, include `scheduler_tick_*`, `session_*`, `brows
 - Final session-start navigation timeouts use a five-minute breaker: 2 for one channel or 3 globally recycle the browser. Three browser-failure recoveries within ten minutes escalate to container restart.
 - Scheduled/manual reload remains enabled when configured and is deliberately excluded from the session-start navigation breaker.
 
+## Telegram 指令隔離與逾時 / Telegram query isolation and deadlines
+
+- `/points` 與 `/screenshot` 使用最多兩筆的背景工作，收訊不等待頁面操作；管理指令維持既有順序。
+  `/points` and `/screenshot` use at most two background flights; polling does not await page operations. Management commands preserve their existing order.
+- 30 秒後記錄 `telegram_query_timeout` 並回覆逾時。底層工作沒有取消能力，因此結束前仍保留名額；不會釋放 Page maintenance queue 或讓同頁操作重疊。晚到的結果會由取消訊號抑制。
+  After 30 seconds, log `telegram_query_timeout` and reply with a timeout. Underlying work cannot be cancelled, so its slot remains occupied until settlement. The Page maintenance queue remains intact; late results are suppressed by an abort signal.
+- 停止服務時取消回覆與計時器，不等待卡住的查詢。查詢失敗記錄 `telegram_query_failed`，回覆失敗記錄 `telegram_send_failed`，均不記錄 chat ID、token 或原始錯誤內容。
+  Shutdown cancels replies and timers without awaiting stuck queries. Query failures log `telegram_query_failed`; reply failures log `telegram_send_failed`, without chat IDs, tokens, or raw errors.
+- `getUpdates` 使用停止訊號與「長輪詢秒數 + 10 秒」逾時訊號的組合；請求及回應本文讀取逾時皆保留 `timeout` 錯誤分類，沿用輪詢重試退避。
+  `getUpdates` combines shutdown cancellation with a long-poll duration plus 10-second deadline. Request and response-body timeouts retain the `timeout` classification and existing polling retry backoff.
+- 回歸測試：`test/unit/telegram-bot.test.ts`、`test/unit/telegram-api.test.ts`，涵蓋卡住的查詢、後續輪詢與 `/status`、逾時、名額限制、晚到結果、停止與網路重試。
+  Regression tests cover stuck queries, subsequent polling and `/status`, deadlines, capacity limits, late results, shutdown, and network retries.
+
 ## 維護原則
 
 - 不要重新加入 Twitch Drops 自動領取或舊 GraphQL claim 流程。
