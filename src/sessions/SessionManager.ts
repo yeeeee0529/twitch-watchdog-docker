@@ -306,6 +306,18 @@ export class DefaultSessionManager implements SessionManager {
         }
       }
 
+      if (reason === 'health_failure_threshold') {
+        const decision = this.recoveryPolicy?.recordStartFailure(channel);
+        if (decision !== undefined) {
+          this.safeLog('warn', 'channel_health_recovery_backoff', {
+            channel,
+            reason,
+            retryAtMs: decision.retryAtMs,
+            consecutiveFailures: decision.consecutiveStartFailures,
+          });
+        }
+      }
+
       this.sessions.delete(channel);
       await this.stopSession(session, channel, reason);
       this.safeLog('debug', 'session_invalidate_completed', {

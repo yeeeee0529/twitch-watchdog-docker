@@ -58,6 +58,41 @@ test.describe('ChannelSession mock pages', () => {
     });
   });
 
+  test('一般登入按鈕回報 login_missing，明確登入阻擋才回報 login_required', async ({ page }) => {
+    const url = mockPageUrl('live.html');
+    await page.goto(url);
+    await page.setContent(`
+      <button data-a-target="login-button">Log in</button>
+      <div data-a-target="video-player">Live stream</div>
+    `);
+    await expect(evaluateChannelHealth(page, url)).resolves.toEqual({
+      healthy: false,
+      reason: 'login_missing',
+    });
+    await page.locator('[data-a-target="video-player"]').evaluate((element) => {
+      element.setAttribute('data-test-selector', 'login-required');
+    });
+    await expect(evaluateChannelHealth(page, url)).resolves.toEqual({
+      healthy: false,
+      reason: 'login_required',
+    });
+  });
+
+  test('隱藏登入按鈕不誤判，未登入也保留播放器錯誤與離線原因', async ({ page }) => {
+    const url = mockPageUrl('live.html');
+    await page.goto(url);
+    await page.setContent(`
+      <button data-a-target="login-button" style="display:none">Log in</button>
+      <div data-a-target="video-player">Live stream</div>
+    `);
+    await expect(evaluateChannelHealth(page, url)).resolves.toEqual({ healthy: true, reason: 'live' });
+    await page.locator('button').evaluate((element) => element.removeAttribute('style'));
+    await page.locator('div').evaluate((element) => element.setAttribute('data-channel-health', 'error'));
+    await expect(evaluateChannelHealth(page, url)).resolves.toEqual({ healthy: false, reason: 'error_page' });
+    await page.locator('div').evaluate((element) => element.setAttribute('data-channel-health', 'offline'));
+    await expect(evaluateChannelHealth(page, url)).resolves.toEqual({ healthy: false, reason: 'offline' });
+  });
+
   test('error 頁面回報 error_page', async ({ page }) => {
     const url = mockPageUrl('error.html');
     await page.goto(url);

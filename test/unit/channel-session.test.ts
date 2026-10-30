@@ -961,7 +961,7 @@ describe('DefaultChannelSession', () => {
     });
   });
 
-  it('第一次失敗 reload 並 recovering，下一次健康才恢復 watching', async () => {
+  it('登入失敗不 reload，下一次健康才恢復 watching', async () => {
     const mockPage = createMockPage({ marker: 'loginRequired' });
     const browser = createBrowserManager(mockPage.page);
     const rewards = createRewardClaimer();
@@ -977,7 +977,7 @@ describe('DefaultChannelSession', () => {
       healthy: false,
       reason: 'login_required',
     });
-    expect(mockPage.reload).toHaveBeenCalledOnce();
+    expect(mockPage.reload).not.toHaveBeenCalled();
     expect(session.state).toBe('recovering');
 
     mockPage.setMarker('liveContent');
@@ -989,6 +989,33 @@ describe('DefaultChannelSession', () => {
 
     await session.stop('test_complete');
   });
+
+  it.each(['login_required', 'login_missing'] as const)(
+    '%s 不重整，仍在連續失敗門檻後關閉並通知失效',
+    async (reason) => {
+      const mockPage = createMockPage({ marker: 'liveContent' });
+      const browser = createBrowserManager(mockPage.page);
+      const onInvalidated = vi.fn(async () => undefined);
+      const session = new DefaultChannelSession({
+        channel: CHANNEL,
+        config: createConfig(),
+        browserManager: browser.manager,
+        rewardClaimer: createRewardClaimer().claimer,
+        healthEvaluator: async () => ({ healthy: false, reason }),
+        onInvalidated,
+      });
+      await session.start();
+      for (let check = 0; check < 3; check += 1) {
+        await expect(session.checkHealth()).resolves.toEqual({ healthy: false, reason });
+      }
+      expect(mockPage.reload).not.toHaveBeenCalled();
+      expect(browser.closePage).toHaveBeenCalledOnce();
+      expect(session.state).toBe('failed');
+      await vi.waitFor(() => {
+        expect(onInvalidated).toHaveBeenCalledWith(CHANNEL, 'health_failure_threshold');
+      });
+    },
+  );
 
   it('連續三次失敗後停止 timers、關閉 page 並進入 failed', async () => {
     const mockPage = createMockPage({ marker: 'offline' });

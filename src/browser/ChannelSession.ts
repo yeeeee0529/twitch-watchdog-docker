@@ -664,7 +664,12 @@ export class DefaultChannelSession implements ChannelSession {
     }
 
     this.currentState = 'recovering';
-    if (this.consecutiveHealthFailures !== 1 || page.isClosed()) {
+    if (
+      result.reason === 'login_required' ||
+      result.reason === 'login_missing' ||
+      this.consecutiveHealthFailures !== 1 ||
+      page.isClosed()
+    ) {
       return;
     }
 

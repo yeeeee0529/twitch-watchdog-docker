@@ -8,9 +8,9 @@ const CONTENT_WARNING_SETTLE_TIMEOUT_MS = 3_000;
 export const CHANNEL_HEALTH_SELECTORS = Object.freeze({
   loginRequired: [
     '[data-test-selector="login-required"]',
-    '[data-a-target="login-button"]',
     '[data-channel-health="login-required"]',
   ].join(', '),
+  loggedOut: '[data-a-target="login-button"]',
   liveContent: [
     '[data-a-target="video-player"]',
     '[data-test-selector="video-player"]',
@@ -40,6 +40,7 @@ export type ChannelHealthFailureReason =
   | 'page_closed'
   | 'url_mismatch'
   | 'login_required'
+  | 'login_missing'
   | 'error_page'
   | 'offline'
   | 'content_warning'
@@ -66,6 +67,7 @@ export type ContentWarningAcceptResult =
 
 interface ChannelHealthSnapshot {
   readonly loginRequired: boolean;
+  readonly loggedOut: boolean;
   readonly error: boolean;
   readonly offline: boolean;
   readonly liveContent: boolean;
@@ -104,10 +106,16 @@ export async function evaluateChannelHealth(
       contentWarningResult === 'accepted' &&
       await isVisible(page.locator(CHANNEL_HEALTH_SELECTORS.liveContent))
     ) {
-      return { healthy: true, reason: 'live' };
+      return snapshot.loggedOut
+        ? { healthy: false, reason: 'login_missing' }
+        : { healthy: true, reason: 'live' };
     }
     if (contentWarningResult !== 'not_present') {
       return { healthy: false, reason: 'content_warning' };
+    }
+
+    if (snapshot.loggedOut) {
+      return { healthy: false, reason: 'login_missing' };
     }
 
     if (snapshot.liveContent) {
@@ -199,6 +207,7 @@ async function readChannelHealthSnapshot(
 
     return {
       loginRequired: hasVisibleElement(selectors.loginRequired),
+      loggedOut: hasVisibleElement(selectors.loggedOut),
       error: hasVisibleElement(selectors.error),
       offline: hasVisibleElement(selectors.offline),
       liveContent: hasVisibleElement(selectors.liveContent),
@@ -208,6 +217,7 @@ async function readChannelHealthSnapshot(
     };
   }, {
     loginRequired: CHANNEL_HEALTH_SELECTORS.loginRequired,
+    loggedOut: CHANNEL_HEALTH_SELECTORS.loggedOut,
     error: CHANNEL_HEALTH_SELECTORS.error,
     offline: CHANNEL_HEALTH_SELECTORS.offline,
     liveContent: CHANNEL_HEALTH_SELECTORS.liveContent,

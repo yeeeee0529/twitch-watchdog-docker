@@ -2,6 +2,18 @@
 
 本文件提供本機開發、測試與維護資訊。使用者部署流程請見 [README.md](README.md)。
 
+## 登入異常與健康檢查重試 / Login failures and health retries
+
+- `page_health_failed.reason: login_missing` 表示頁面顯示一般登入按鈕；`login_required` 表示明確的登入阻擋。兩者都不視為健康觀看，也不代表忠誠點數正在累積。播放器錯誤與離線仍保留各自原因。
+  `login_missing` means the page shows the ordinary login button; `login_required` means an explicit login gate. Neither counts as healthy viewing or proves points are accruing. Player errors and offline states retain their own reasons.
+- 登入異常不會立即重整頁面；達既有連續健康失敗門檻後仍會關閉該頁。健康失敗造成的 session 失效會沿用 `browser.session_start.failure_backoff_seconds`（預設 `[30, 60, 120]`），之後以 `maximum_cooldown_seconds`（預設 900 秒）延後重試；實際重試時間取決於下一次排程。這與啟動失敗共用計數，短暫成功開頁不會清除，持續穩定達 `browser.recovery.stable_reset_seconds` 後才重設。
+  Login failures skip the immediate health-triggered reload. The existing consecutive-failure threshold still closes the page. Health invalidations share the session-start failure counter and configured backoffs (default 30, 60, 120 seconds, then 900 seconds); retry occurs on the next eligible scheduler tick. Opening a page briefly does not reset the counter; the configured stable period does.
+- `channel_health_recovery_backoff` 記錄頻道、累計失敗數與下次可重試時間 `retryAtMs`。此路徑不計為 page crash，也不觸發崩潰通知或瀏覽器崩潰回收。
+  `channel_health_recovery_backoff` reports the channel, accumulated failures, and next eligible retry time (`retryAtMs`). This path does not count as a page crash or trigger crash notifications/browser crash recovery.
+- 若持續出現登入異常，請在本機執行 `npm run twitch:login` 手動重新登入並匯出狀態，將檔案放回部署所掛載的位置後重啟服務。請勿分享登入狀態檔。HTTP 429 仍保留 warn，重試退避不會解除 Twitch 的限流，也無法自動恢復登入。
+  For persistent login failures, manually reauthenticate with `npm run twitch:login`, replace the deployed state file, and restart the service. Do not share that file. HTTP 429 remains a warning; backoff cannot remove Twitch rate limits or restore authentication.
+
+
 ## 專案結構
 
 - `src/config`：YAML 設定、環境變數覆寫、runtime config 持久化。

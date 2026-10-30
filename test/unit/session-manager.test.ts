@@ -337,6 +337,46 @@ describe('DefaultSessionManager', () => {
     );
   });
 
+  it('健康失敗逐步冷卻，重複失效不重算，其他頻道不受影響且穩定後重設', async () => {
+    let nowMs = 0;
+    const policy = createRecoveryPolicy(() => nowMs);
+    const factory = createFactory();
+    const logger = createLogger();
+    const manager = new DefaultSessionManager(factory, {
+      logger,
+      recoveryPolicy: policy,
+      configuredChannels: ['a', 'b'],
+    });
+    await manager.reconcile(['a', 'b']);
+
+    for (const cooldownMs of [30_000, 60_000, 120_000, 900_000]) {
+      await manager.invalidate('a', 'health_failure_threshold');
+      const retryAtMs = nowMs + cooldownMs;
+      expect(policy.getState('a').nextRetryAtMs).toBe(retryAtMs);
+      expect(policy.getState('a').consecutivePageCrashes).toBe(0);
+      await manager.invalidate('a', 'health_failure_threshold');
+      expect(policy.getState('a').nextRetryAtMs).toBe(retryAtMs);
+      const creations = factory.create.mock.calls.length;
+      nowMs = retryAtMs - 1;
+      await manager.reconcile(['a', 'b']);
+      expect(manager.getActiveChannels()).toEqual(['b']);
+      expect(factory.create).toHaveBeenCalledTimes(creations);
+      nowMs = retryAtMs;
+      await manager.reconcile(['a', 'b']);
+      expect(manager.getActiveChannels()).toEqual(['a', 'b']);
+    }
+    expect(logger.warn).toHaveBeenCalledWith(
+      'channel_health_recovery_backoff',
+      expect.objectContaining({ channel: 'a', consecutiveFailures: 4 }),
+    );
+    nowMs += 1_800_000;
+    await manager.reconcile(['a', 'b']);
+    expect(policy.getState('a').consecutiveStartFailures).toBe(0);
+    await manager.invalidate('a', 'health_failure_threshold');
+    expect(policy.getState('a').nextRetryAtMs).toBe(nowMs + 30_000);
+    await manager.stopAll('test_complete');
+  });
+
   it('quarantine 到期前不啟動，到期後只啟動一個 probe', async () => {
     let nowMs = 0;
     const policy = createRecoveryPolicy(() => nowMs);

@@ -10,6 +10,7 @@ const TARGET_URL = 'https://www.twitch.tv/streamer_one';
 
 interface HealthSnapshot {
   readonly loginRequired: boolean;
+  readonly loggedOut?: boolean;
   readonly error: boolean;
   readonly offline: boolean;
   readonly liveContent: boolean;
@@ -133,6 +134,25 @@ describe('evaluateChannelHealth', () => {
       evaluateChannelHealth(offlinePage.page, TARGET_URL),
     ).resolves.toEqual({ healthy: false, reason: 'offline' });
     expect(offlinePage.locator).not.toHaveBeenCalled();
+  });
+
+  it('一般未登入回報 login_missing，明確登入阻擋仍優先', async () => {
+    const snapshot = {
+      loginRequired: false,
+      loggedOut: true,
+      error: false,
+      offline: false,
+      liveContent: true,
+      unsupportedPlayerError: false,
+    };
+    await expect(evaluateChannelHealth(createPage(snapshot).page, TARGET_URL))
+      .resolves.toEqual({ healthy: false, reason: 'login_missing' });
+    await expect(evaluateChannelHealth(createPage({ ...snapshot, loginRequired: true }).page, TARGET_URL))
+      .resolves.toEqual({ healthy: false, reason: 'login_required' });
+    await expect(evaluateChannelHealth(createPage({ ...snapshot, error: true }).page, TARGET_URL))
+      .resolves.toEqual({ healthy: false, reason: 'error_page' });
+    await expect(evaluateChannelHealth(createPage({ ...snapshot, liveContent: false }, { contentWarning: true }).page, TARGET_URL))
+      .resolves.toEqual({ healthy: false, reason: 'login_missing' });
   });
 
   it('content warning 仍用 Locator 點擊並等待 live content', async () => {
